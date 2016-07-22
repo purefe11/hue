@@ -422,7 +422,7 @@ def close_notebook(request):
 
   for session in [_s for _s in notebook['sessions'] if _s['type'] in ('scala', 'spark', 'pyspark', 'sparkr')]:
     try:
-      response['result'].append(get_api(request, session).close_session(session))
+      response['result'].append(get_api(request, session).close_session(notebook, session))
     except QueryExpired:
       pass
     except Exception, e:
@@ -430,7 +430,7 @@ def close_notebook(request):
 
   for snippet in [_s for _s in notebook['snippets'] if _s['type'] in ('hive', 'impala')]:
     try:
-      response['result'] = get_api(request, snippet).close_statement(snippet)
+      response['result'] = get_api(request, snippet).close_statement(notebook, snippet)
     except QueryExpired:
       pass
     except Exception, e:
@@ -452,7 +452,7 @@ def close_statement(request):
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
   try:
-    response['result'] = get_api(request, snippet).close_statement(snippet)
+    response['result'] = get_api(request, snippet).close_statement(notebook, snippet)
   except QueryExpired:
     pass
 
@@ -473,7 +473,7 @@ def autocomplete(request, server=None, database=None, table=None, column=None, n
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
   try:
-    autocomplete_data = get_api(request, snippet).autocomplete(snippet, database, table, column, nested)
+    autocomplete_data = get_api(request, snippet).autocomplete(notebook, snippet, database, table, column, nested)
     response.update(autocomplete_data)
   except QueryExpired:
     pass
@@ -493,7 +493,7 @@ def get_sample_data(request, server=None, database=None, table=None, column=None
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
-  sample_data = get_api(request, snippet).get_sample_data(snippet, database, table, column)
+  sample_data = get_api(request, snippet).get_sample_data(notebook, snippet, database, table, column)
   response.update(sample_data)
 
   response['status'] = 0
@@ -594,7 +594,7 @@ def export_result(request):
         request.fs.do_as_user(request.user.username, request.fs.rmtree, destination)
       else:
         raise ValidationError(_("The target path is a directory"))
-    response['watch_url'] = api.export_data_as_hdfs_file(snippet, destination, overwrite)
+    response['watch_url'] = api.export_data_as_hdfs_file(notebook, snippet, destination, overwrite)
     response['status'] = 0
   elif data_format == 'hive-table':
     notebook_id = notebook['id'] or request.GET.get('editor', request.GET.get('notebook'))

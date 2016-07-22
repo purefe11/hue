@@ -20,6 +20,8 @@ import logging
 import re
 import StringIO
 
+from uuid import uuid4
+
 from django.core.urlresolvers import reverse
 from django.utils.translation import ugettext as _
 
@@ -124,7 +126,6 @@ class ImpalaConfiguration(object):
 
 
 class HS2Api(Api):
-
   @staticmethod
   def get_properties(lang='hive'):
     return ImpalaConfiguration.PROPERTIES if lang == 'impala' else HiveConfiguration.PROPERTIES
@@ -132,12 +133,10 @@ class HS2Api(Api):
 
   @query_error_handler
   def create_session(self, lang='hive', properties=None):
-    application = 'beeswax' if lang == 'hive' else lang
+    cache_tag = '-' + uuid4().hex
+    query_server = get_query_server_config(name=lang, server=None, cache_tag=cache_tag)
 
-    session = Session.objects.get_session(self.user, application=application)
-
-    if session is None:
-      session = dbms.get(self.user, query_server=get_query_server_config(name=lang)).open_session(self.user)
+    session = dbms.get(self.user, query_server=query_server).open_session(self.user)
 
     if not properties:
       config = DefaultConfiguration.objects.get_configuration_for_user(app=lang, user=self.user)
@@ -147,25 +146,28 @@ class HS2Api(Api):
         properties = self.get_properties(lang)
 
     return {
-        'type': lang,
-        'id': session.id,
-        'properties': properties
+      'type': lang,
+      'id': session.id,
+      'properties': properties,
+      'cache_tag': cache_tag
     }
 
 
   @query_error_handler
-  def close_session(self, session):
+  def close_session(self, notebook, session):
     app_name = session.get('type')
     session_id = session.get('id')
+    cache_tag = session.get('cache_tag', None)
 
-    query_server = get_query_server_config(name=app_name)
+    query_server = get_query_server_config(name=app_name, server=None, cache_tag=cache_tag)
 
     response = {'status': -1, 'message': ''}
 
     try:
-      filters = {'id': session_id, 'application': query_server['server_name']}
-      if not self.user.is_superuser:
-        filters['owner'] = self.user
+      filters = {'id': session_id, 'application': query_server['server_name'], 'owner': self.user}
+      # filters = {'id': session_id, 'application': query_server['server_name']}
+      # if not self.user.is_superuser:
+      #   filters['owner'] = self.user
       session = Session.objects.get(**filters)
     except Session.DoesNotExist:
       response['message'] = _('Session does not exist or you do not have permissions to close the session.')
@@ -181,7 +183,7 @@ class HS2Api(Api):
 
   @query_error_handler
   def execute(self, notebook, snippet):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     statement = self._get_current_statement(db, snippet)
     session = self._get_session(notebook, snippet['type'])
@@ -211,7 +213,7 @@ class HS2Api(Api):
   @query_error_handler
   def check_status(self, notebook, snippet):
     response = {}
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     handle = self._get_handle(snippet)
     operation = db.get_operation_status(handle)
@@ -227,7 +229,7 @@ class HS2Api(Api):
 
   @query_error_handler
   def fetch_result(self, notebook, snippet, rows, start_over):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     handle = self._get_handle(snippet)
     results = db.fetch(handle, start_over=start_over, rows=rows)
@@ -252,7 +254,7 @@ class HS2Api(Api):
 
   @query_error_handler
   def cancel(self, notebook, snippet):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     handle = self._get_handle(snippet)
     db.cancel_operation(handle)
@@ -261,19 +263,19 @@ class HS2Api(Api):
 
   @query_error_handler
   def get_log(self, notebook, snippet, startFrom=None, size=None):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     handle = self._get_handle(snippet)
     return db.get_log(handle, start_over=startFrom == 0)
 
 
   @query_error_handler
-  def close_statement(self, snippet):
+  def close_statement(self, notebook, snippet):
     if snippet['type'] == 'impala':
       from impala import conf as impala_conf
 
     if (snippet['type'] == 'hive' and beeswax_conf.CLOSE_QUERIES.get()) or (snippet['type'] == 'impala' and impala_conf.CLOSE_QUERIES.get()):
-      db = self._get_db(snippet)
+      db = self._get_db(notebook, snippet)
 
       handle = self._get_handle(snippet)
       db.close_operation(handle)
@@ -285,7 +287,7 @@ class HS2Api(Api):
   @query_error_handler
   def download(self, notebook, snippet, format):
     try:
-      db = self._get_db(snippet)
+      db = self._get_db(notebook, snippet)
       handle = self._get_handle(snippet)
       return data_export.download(handle, format, db)
     except Exception, e:
@@ -333,20 +335,20 @@ class HS2Api(Api):
 
 
   @query_error_handler
-  def autocomplete(self, snippet, database=None, table=None, column=None, nested=None):
-    db = self._get_db(snippet)
+  def autocomplete(self, notebook, snippet, database=None, table=None, column=None, nested=None):
+    db = self._get_db(notebook, snippet)
     return _autocomplete(db, database, table, column, nested)
 
 
   @query_error_handler
-  def get_sample_data(self, snippet, database=None, table=None, column=None):
-    db = self._get_db(snippet)
+  def get_sample_data(self, notebook, snippet, database=None, table=None, column=None):
+    db = self._get_db(notebook, snippet)
     return _get_sample_data(db, database, table, column)
 
 
   @query_error_handler
   def explain(self, notebook, snippet):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
     response = self._get_current_statement(db, snippet)
     session = self._get_session(notebook, snippet['type'])
     query = self._prepare_hql_query(snippet, response.pop('statement'), session)
@@ -361,8 +363,8 @@ class HS2Api(Api):
 
 
   @query_error_handler
-  def export_data_as_hdfs_file(self, snippet, target_file, overwrite):
-    db = self._get_db(snippet)
+  def export_data_as_hdfs_file(self, notebook, snippet, target_file, overwrite):
+    db = self._get_db(notebook, snippet)
 
     handle = self._get_handle(snippet)
 
@@ -372,7 +374,7 @@ class HS2Api(Api):
 
 
   def export_data_as_table(self, notebook, snippet, destination):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     response = self._get_current_statement(db, snippet)
     session = self._get_session(notebook, snippet['type'])
@@ -396,7 +398,7 @@ class HS2Api(Api):
 
 
   def export_large_data_to_hdfs(self, notebook, snippet, destination):
-    db = self._get_db(snippet)
+    db = self._get_db(notebook, snippet)
 
     response = self._get_current_statement(db, snippet)
     session = self._get_session(notebook, snippet['type'])
@@ -541,7 +543,7 @@ class HS2Api(Api):
 
 
   def get_select_star_query(self, snippet, database, table):
-    db = self._get_db(snippet)
+    db = self._get_db(None, snippet)
     table = db.get_table(database, table)
     return db.get_select_star_query(database, table)
 
@@ -556,7 +558,7 @@ class HS2Api(Api):
     return HiveServerQueryHandle(**snippet['result']['handle'])
 
 
-  def _get_db(self, snippet):
+  def _get_db(self, notebook, snippet):
     if snippet['type'] == 'hive':
       name = 'beeswax'
     elif snippet['type'] == 'impala':
@@ -564,4 +566,11 @@ class HS2Api(Api):
     else:
       name = 'spark-sql'
 
-    return dbms.get(self.user, query_server=get_query_server_config(name=name))
+    cache_tag = None
+    if notebook is not None and notebook.has_key('sessions'):
+      session = self._get_session(notebook, snippet['type'])
+      if session is not None:
+          cache_tag = session.get('cache_tag', None)
+
+    query_server = get_query_server_config(name=name, server=None, cache_tag=cache_tag)
+    return dbms.get(self.user, query_server)

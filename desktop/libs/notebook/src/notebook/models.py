@@ -80,7 +80,8 @@ def make_notebook(name='Browse', description='', editor_type='hive', statement='
       {
          'type': editor_type,
          'properties': properties,
-         'id': None
+         'id': None,
+         'cache_tag': None
       }
     ],
     'selectedSnippet': editor_type,

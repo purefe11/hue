@@ -52,24 +52,26 @@ def get(user, query_server=None):
   try:
     DBMS_CACHE.setdefault(user.username, {})
 
-    if query_server['server_name'] not in DBMS_CACHE[user.username]:
+    cache_tag= query_server.get('cache_tag', None)
+    cache_key = query_server['server_name'] + cache_tag if cache_tag is not None else ''
+    if cache_key not in DBMS_CACHE[user.username]:
       # Avoid circular dependency
       from beeswax.server.hive_server2_lib import HiveServerClientCompatible
 
       if query_server['server_name'] == 'impala':
         from impala.dbms import ImpalaDbms
         from impala.server import ImpalaServerClient
-        DBMS_CACHE[user.username][query_server['server_name']] = ImpalaDbms(HiveServerClientCompatible(ImpalaServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
+        DBMS_CACHE[user.username][cache_key] = ImpalaDbms(HiveServerClientCompatible(ImpalaServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
       else:
         from beeswax.server.hive_server2_lib import HiveServerClient
-        DBMS_CACHE[user.username][query_server['server_name']] = HiveServer2Dbms(HiveServerClientCompatible(HiveServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
+        DBMS_CACHE[user.username][cache_key] = HiveServer2Dbms(HiveServerClientCompatible(HiveServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
 
-    return DBMS_CACHE[user.username][query_server['server_name']]
+    return DBMS_CACHE[user.username][cache_key]
   finally:
     DBMS_CACHE_LOCK.release()
 
 
-def get_query_server_config(name='beeswax', server=None):
+def get_query_server_config(name='beeswax', server=None, cache_tag=None):
   if name == 'impala':
     from impala.dbms import get_query_server_config as impala_query_server_config
     query_server = impala_query_server_config()
@@ -89,7 +91,9 @@ def get_query_server_config(name='beeswax', server=None):
         },
         'transport_mode': 'http' if hive_site.hiveserver2_transport_mode() == 'HTTP' else 'socket',
         'auth_username': AUTH_USERNAME.get(),
-        'auth_password': AUTH_PASSWORD.get()
+        'auth_password': AUTH_PASSWORD.get(),
+        'session_id': None,
+        'cache_tag': cache_tag
     }
 
   if name == 'sparksql': # Spark SQL is almost the same as Hive

@@ -605,6 +605,8 @@ class HiveServerClient:
                                      server_protocol_version=res.serverProtocolVersion,
                                      properties=properties)
 
+    self.query_server['session_id'] = session.id
+
     # HS2 does not return properties in TOpenSessionResp
     if not session.get_properties():
       session.properties = json.dumps(self.get_configuration())
@@ -614,7 +616,17 @@ class HiveServerClient:
 
 
   def call(self, fn, req, status=TStatusCode.SUCCESS_STATUS):
-    session = Session.objects.get_session(self.user, self.query_server['server_name'])
+    session_id = self.query_server.get('session_id', None)
+    if session_id:
+      filters = {'id': session_id, 'application': self.query_server['server_name'], 'owner': self.user}
+      session = Session.objects.get(**filters)
+      LOG.debug("HS2 call reusing already exsisted session,  session id = %s" % str(session_id))
+      if not session:
+        session = self.open_session(self.user)
+        LOG.debug("HS2 call the new session was created after unsuccessful attempt to reuse already existed one, session id = %s" % str(session.id))
+    else:
+      session = self.open_session(self.user)
+      LOG.debug("HS2 call the new session was created, session id = %s" % str(session.id))
 
     if session is None:
       session = self.open_session(self.user)
