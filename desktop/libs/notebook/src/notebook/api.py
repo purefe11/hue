@@ -87,9 +87,10 @@ def create_session(request):
 def close_session(request):
   response = {'status': -1}
 
+  notebook = json.loads(request.POST.get('notebook', '{}'))
   session = json.loads(request.POST.get('session', '{}'))
 
-  response['session'] = get_api(request, {'type': session['type']}).close_session(session=session)
+  response['session'] = get_api(request, {'type': session['type']}).close_session(notebook=notebook, session=session)
   response['status'] = 0
 
   return JsonResponse(response)
